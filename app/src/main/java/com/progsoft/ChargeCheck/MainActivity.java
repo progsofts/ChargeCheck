@@ -1,12 +1,17 @@
 package com.progsoft.ChargeCheck;
 
+import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.Intent;
 import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Message;
 import android.util.Log;
 import android.view.Gravity;
 import android.widget.LinearLayout;
@@ -15,27 +20,37 @@ import android.widget.TableRow;
 import android.widget.TextView;
 
 import java.io.BufferedReader;
-import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileReader;
-import java.io.FileWriter;
+import java.lang.ref.WeakReference;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 
+@SuppressLint("SetTextI18n")
 public class MainActivity extends AppCompatActivity {
     // 声明变量
     TableLayout tableLayout;
-    private final ArrayList<DataItem> dataItems = new ArrayList<>();
-    private final String TAG = "MainActivity";
-    Thread mThread;
+    private static final ArrayList<DataItem> dataItems = new ArrayList<>();
+    private static final String TAG = "MainActivity";
+//    Thread mThread;
+    public static MyHandler myHandler = null;
 
+    @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Log.e(TAG, "onCreate");
 
+        File path = new File(Environment.getExternalStorageDirectory()+"/progsoft/charge/log/");
+        if(!path.exists()){
+            Log.e(TAG, "mkdir " + path + " " + path.mkdirs());
+        }
+
+        TextView tv = findViewById(R.id.version);
+        tv.setText("PC-VER:" + BuildConfig.VERSION_NAME + " " + BuildConfig.BUILD_TYPE);
         // 添加要显示的数据
         dataItems.add(new DataItem("新星花园2号楼1001室", "(21, 104)", "90"));
         for (int i = 0; i < 2; i++)
@@ -43,28 +58,58 @@ public class MainActivity extends AppCompatActivity {
         // 绘制表格
 //        initTable();
 
-        MyLoop myRunnable = new MyLoop();
-        if (mThread != null) {
-            mThread.interrupt();
-            mThread = null;
+        Intent service = new Intent(getApplicationContext(), MyService.class);
+        getApplicationContext().startForegroundService(service);
+        if (myHandler == null) {
+            myHandler = new MyHandler(new WeakReference<>(this));
+            Log.e(TAG, "new Handler");
+        } else {
+            Log.e(TAG, "old Handler");
         }
-        mThread = new Thread(myRunnable, "Timer");
-        mThread.start();
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        FileRead("progsoft/ChargeCheck3.txt");
+        fileRead(Utils.INFO_FILENAME);
         initTable();
     }
 
-    class MyRunnable implements Runnable {
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        Log.e(TAG, "onDestroy");
+        myHandler = null;
+    }
+
+    class MyHandler extends Handler {
+        private final WeakReference<MainActivity> activity;
+        MyHandler(WeakReference<MainActivity> activity) {
+            this.activity = activity;
+        }
+        @Override
+        public void handleMessage(Message msg) {
+            if (msg.what == 0) {
+                fileRead(Utils.INFO_FILENAME);
+                initTable();
+            } else {
+                TextView tv = findViewById(R.id.textView);
+                tv.setText(new Date().toLocaleString());
+            }
+        }
+    }
+
+    public static void sendHandler(int what) {
+        Message check = myHandler.obtainMessage(what, "");
+        myHandler.sendMessage(check);
+    }
+
+    static class MyRunnable implements Runnable {
         @Override
         public void run() {
-            String result = HttpClient.doGet("https://www.baidu.com/");
+            String result = HttpClient.doGet(Utils.GET_CHARGE_URL);
             if (result.length() < 1000) {
-                FileWrite("progsoft/ChargeCheck_log.txt", "GET result:" + result, true);
+                Utils.FileWrite(Utils.LOG_FILENAME, "GET URL ERROR responses:" + result, true);
                 return;
             }
             int index = 0;
@@ -76,11 +121,13 @@ public class MainActivity extends AppCompatActivity {
                 int var = result.indexOf(",", index + 1);
                 k++;
                 newRecord.append(result.substring(index + 8, var)).append(",");
-            } while (k < 40);
+            } while (k < 40); //最多支持充电桩数量 防止死循环
+            long now = System.currentTimeMillis() / 1000;
             @SuppressLint("SimpleDateFormat") SimpleDateFormat sdf = new SimpleDateFormat("HHmm");
-            dataItems.add(new DataItem(sdf.format(new Date()) + "," + newRecord));
-            FileWrite("progsoft/ChargeCheck_log.txt", sdf.format(new Date()) + "," + newRecord, true);
-            FileWrite("progsoft/ChargeCheck3.txt", sdf.format(new Date()) + "," + newRecord, false);
+            dataItems.add(new DataItem(sdf.format(new Date()) + "," + newRecord + now));
+            Utils.FileWrite(Utils.LOG_FILENAME, sdf.format(new Date()) + "," + newRecord + now, true);
+            Utils.FileWrite(Utils.INFO_FILENAME, sdf.format(new Date()) + "," + newRecord + now, false);
+            sendHandler(0);
         }
     }
 
@@ -97,7 +144,7 @@ public class MainActivity extends AppCompatActivity {
                     }
                     loop++;
                     Thread.sleep(30 * 1000L);
-                    FileWrite("progsoft/ChargeCheck_log.txt", "My loop:" + loop, true);
+                    Utils.FileWrite(Utils.LOG_FILENAME, "My loop:" + loop, true);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                     break;
@@ -106,8 +153,13 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    public static void getChargeInfo() {
+        MyRunnable myRunnable = new MyRunnable();
+        Thread mThread = new Thread(myRunnable, "Timer");
+        mThread.start();
+    }
 
-    @SuppressLint("SetTextI18n")
+
     private void initTable() {
         tableLayout = findViewById(R.id.tableLayout);
         tableLayout.removeAllViews();
@@ -186,30 +238,66 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    public void FileWrite(String filename, String context, boolean tFlag) {
-        try {
-            String newTitle = "";
-            File file = new File(Environment.getExternalStorageDirectory(), filename);
-            if (!file.exists()) {
-                newTitle = "开启新的一天，加油吧\n";
-            }
-            BufferedWriter bw = new BufferedWriter(new FileWriter(file, true));
-            Date now = new Date();
-            if (tFlag) {
-                bw.write(newTitle + now + " , " + context);
-            } else {
-                bw.write(context);
-            }
-            bw.newLine();
-            bw.flush();
-            bw.close();
-            Log.e(TAG, context);
-        } catch (Exception e) {
-            e.printStackTrace();
+    public String getTimeDesc(long lastTime) {
+        long now = System.currentTimeMillis() / 1000;
+        if (now - lastTime < 60) {
+            return "刚刚**";
         }
+        now /= 60;
+        lastTime /=60;
+        if (now - lastTime < 60) {
+            return (now - lastTime) + "分钟前*";
+        }
+        now /= 60;
+        lastTime /=60;
+        if (now - lastTime < 24) {
+            return (now - lastTime) + "小时前";
+        }
+        now /= 24;
+        lastTime /= 24;
+        return (now - lastTime) + "天前";
     }
 
-    public void FileRead(String filename) {
+    public String getDescription(int[] status, long[] update) {
+        String[] description = new String[6];
+        Arrays.fill(description, "");
+
+        int[] counts = new int[6];
+        Arrays.fill(counts, 0);
+
+        for (int k = 1; k < 31; k++) {
+            switch (status[k]) {
+                case Utils.STATUS_GUN_FREE:
+                    counts[1]++;
+                    description[1] += "第" + k + "枪 " + getTimeDesc(update[k]) + " 空闲 **\n";
+                    break;
+                case Utils.STATUS_GUN_PLUGED:
+                    counts[2]++;
+                    description[2] += "第" + k + "枪 " + getTimeDesc(update[k]) + " 插枪未充电 --\n";
+                    break;
+                case Utils.STATUS_GUN_CHARGING:
+                    counts[3]++;
+                    description[3] += "第" + k + "枪 " + getTimeDesc(update[k]) + " 充电中 XX\n";
+                    break;
+                case Utils.STATUS_GUN_CHARGED:
+                    counts[4]++;
+                    description[4] += "第" + k + "枪 " + getTimeDesc(update[k]) + " 插枪已充满 ++\n";
+                    break;
+                default:
+                    counts[5]++;
+                    description[5] += "第" + k + "枪 " + getTimeDesc(update[k]) + " 异常\n";
+                    break;
+            }
+        }
+        return " =====空枪===== " + counts[1] + "\n" + description[1] + " =====充完占用===== " + counts[4] + "\n" + description[4] +
+                " =====正在使用===== " + counts[3] + "\n" + description[3] + " =====等待充电===== " + counts[2] + "\n" + description[2] +
+                " =====异常===== " + counts[5] + "\n" + description[5];
+    }
+
+    public void fileRead(String filename) {
+        int[] status = null;
+        long[] updateTime = null;
+        long newTime = 0;
         try {
             dataItems.clear();
             File file = new File(Environment.getExternalStorageDirectory(), filename);
@@ -223,10 +311,59 @@ public class MainActivity extends AppCompatActivity {
                 String s = br.readLine();
                 if (s == null) break;
                 dataItems.add(new DataItem(s));
-                if (dataItems.size() > 10) {
+                if (dataItems.size() > Utils.MAX_DISPLAY_RECORD) {
                     dataItems.remove(0);
                 }
+
+                //计算使用情况
+                String[] Info = s.split(",");
+                if (status == null) {
+                    status = new int[Info.length];
+                    updateTime = new long[Info.length];
+                    for (int k = 1; k < Info.length - 1; k++) {
+                        status[k] = Integer.parseInt(Info[k]);
+                        updateTime[k] = Integer.parseInt(Info[31]);
+                    }
+                } else {
+                    newTime = Integer.parseInt(Info[31]);
+                    for (int k = 0; k < Info.length - 1; k++) {
+                        switch (Info[k]) {
+                            case "1" : //空闲
+                                if (status[k] != Utils.STATUS_GUN_FREE) { //其他状态进入空闲
+                                    status[k] = Utils.STATUS_GUN_FREE;
+                                    updateTime[k] = newTime;
+                                }
+                                break;
+                            case "2" : //插枪
+                                if (status[k] == Utils.STATUS_GUN_FREE) { //空闲 插枪未充电
+                                    status[k] = Utils.STATUS_GUN_PLUGED;
+                                    updateTime[k] = newTime;
+                                } else if (status[k] == Utils.STATUS_GUN_CHARGING) { // 充满，插枪
+                                    status[k] = Utils.STATUS_GUN_CHARGED;
+                                    updateTime[k] = newTime;
+                                }
+                                break;
+                            case "3" : //使用中
+                                if (status[k] != Utils.STATUS_GUN_CHARGING) { //其他状态进入充电状态
+                                    status[k] = Utils.STATUS_GUN_CHARGING;
+                                    updateTime[k] = newTime;
+                                }
+                                break;
+                            default:   //异常
+                                if (status[k] != Utils.STATUS_GUN_ERROR) { //其他状态进入异常
+                                    status[k] = Utils.STATUS_GUN_ERROR;
+                                    updateTime[k] = newTime;
+                                }
+                                break;
+                        }
+                    }
+                }
             } while (true);
+
+            String result = getDescription(status, updateTime);
+            Log.e(TAG, result);
+            TextView tv = findViewById(R.id.result);
+            tv.setText(new Date(newTime * 1000).toLocaleString() + "\n" + result);
             dataItems.add(0, new DataItem(" , 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,"));
             dataItems.add(new DataItem(" , 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,"));
             dataItems.add(new DataItem(" , 1, 2, 3, 4, 5, 6, 7, 8, 9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,"));
