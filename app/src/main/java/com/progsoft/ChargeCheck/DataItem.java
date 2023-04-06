@@ -2,7 +2,7 @@ package com.progsoft.ChargeCheck;
 
 public class DataItem {
     private String address, LL, distance;
-    private String record;
+    private final String record;
 
     public DataItem(String address, String LL, String distance) {
         this.address = address;
