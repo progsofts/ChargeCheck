@@ -6,6 +6,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -36,6 +37,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "MainActivity";
 //    Thread mThread;
     public static MyHandler myHandler = null;
+    public static NetworkConnectChangedReceiver mNetworkChangeListener = new NetworkConnectChangedReceiver();
 
     @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
@@ -43,6 +45,12 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         Log.e(TAG, "onCreate");
+
+        IntentFilter filter = new IntentFilter();
+        filter.addAction("android.net.conn.CONNECTIVITY_CHANGE");
+        filter.addAction("android.net.wifi.WIFI_STATE_CHANGED");
+        filter.addAction("android.net.wifi.STATE_CHANGE");
+        registerReceiver(mNetworkChangeListener,filter);
 
         File path = new File(Environment.getExternalStorageDirectory()+"/progsoft/charge/log/");
         if(!path.exists()){
@@ -107,6 +115,12 @@ public class MainActivity extends AppCompatActivity {
     static class MyRunnable implements Runnable {
         @Override
         public void run() {
+            //等待2s，可能网络还没连接上
+            try {
+                Thread.sleep(2 * 1000L);
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
             String result = HttpClient.doGet(Utils.GET_CHARGE_URL);
             if (result.length() < 1000) {
                 Utils.FileWrite(Utils.LOG_FILENAME, "GET URL ERROR responses:" + result, true);
@@ -238,6 +252,122 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void initTableMap(int[] status, long[] update) {
+        tableLayout = findViewById(R.id.mapTableLayout);
+        tableLayout.removeAllViews();
+
+        int[][] map = {{105,45,45,60,0,3,2,1},
+                {75,6,2,18,4,0,0,0},
+                {75,4,0,24,5,0,0,0},
+                {195,4,1,30,6,0,0,7},
+                {105,4,1,150,9,0,0,8},
+                {75,4,1,60,10,0,0,16},
+                {75,4,1,30,11,0,0,15},
+                {75,4,1,30,12,0,0,14},
+                {195,4,1,150,13,0,0,0},
+                {105,4,1,60,26,0,0,0},
+                {75,4,1,30,25,0,0,27},
+                {75,4,1,30,24,0,0,28},
+                {75,4,1,30,23,0,0,29},
+                {75,4,1,150,22,0,0,0},
+                {195,4,1,60,30,0,0,21},
+                {105,4,1,30,19,0,0,20},
+                {75,4,0,18,18,0,0,0},
+                {195,132,128,144,17,0,0,0},
+        };
+
+        int padding = dip2px(getApplicationContext(), 5);
+
+        // 遍历dataItems, 每一条数据都加进TableLayout中
+        for (int[] ints : map) {
+            // 新建一个TableRow并设置样式
+            TableRow newRow = new TableRow(getApplicationContext());
+            TableRow.LayoutParams layoutParams = new TableRow.LayoutParams();
+            newRow.setLayoutParams(layoutParams);
+
+            //新建一个LinearLayout
+            LinearLayout linearLayout = new LinearLayout(getApplicationContext());
+            linearLayout.setOrientation(LinearLayout.HORIZONTAL);
+            //一半是格式，一半是值
+            for (int j = 0; j < ints.length / 2; j++) {
+                // 将所有新的组件加入到对应的视图中
+                TextView tvDistance = new TextView(getApplicationContext());
+
+                // 设置文字居中
+                tvDistance.setGravity(Gravity.CENTER);
+                // 设置表格中的数据不自动换行
+                //tvDistance.setSingleLine();
+                // 设置边框和weight
+                LinearLayout.LayoutParams lpDistance = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2f);
+                int[] draw = new int[4];
+                int[] mark = {1, 2, 4, 8};
+                for (int k = 0; k < 4; k++) {
+                    if ((ints[j] & mark[k]) > 0) {
+                        draw[k] = dip2px(getApplicationContext(), 1);
+                        continue;
+                    }
+                    if ((ints[j] & (mark[k] * 16)) > 0) {
+                        draw[k] = dip2px(getApplicationContext(), 3);
+                        continue;
+                    }
+                    draw[k] = 0;
+                }
+                lpDistance.setMargins(draw[2], draw[1], draw[0], draw[3]);
+                tvDistance.setLayoutParams(lpDistance);
+                // 设置padding和背景颜色
+                tvDistance.setPadding(padding, padding, padding, padding);
+                tvDistance.setBackgroundColor(Color.parseColor("#FFFFFF"));
+
+                int value = ints[j + 4];
+                if (value > 0) {
+                    tvDistance.setText("" + getTimeDescEng(update[value]));
+                    // 填充文字数据
+                    switch (status[value]) {
+                        case Utils.STATUS_GUN_FREE:
+                            tvDistance.setBackgroundColor(Color.parseColor("#20F010"));
+                            break;
+                        case Utils.STATUS_GUN_PLUGED:
+                            tvDistance.setBackgroundColor(Color.parseColor("#E06020"));
+                            break;
+                        case Utils.STATUS_GUN_CHARGING:
+                            tvDistance.setBackgroundColor(Color.parseColor("#FF2020"));
+                            break;
+                        case Utils.STATUS_GUN_CHARGED:
+                            tvDistance.setBackgroundColor(Color.parseColor("#D0E010"));
+                            break;
+                        default:
+                            tvDistance.setBackgroundColor(Color.parseColor("#A0A0A0"));
+                            break;
+                    }
+                }
+                linearLayout.addView(tvDistance);
+            }
+            newRow.addView(linearLayout);
+            tableLayout.addView(newRow);
+        }
+    }
+
+    public String getTimeDescEng(long lastTime) {
+        long now = System.currentTimeMillis() / 1000;
+        if (now - lastTime < 60) {
+            return (now - lastTime) + "s";
+        }
+        now /= 60;
+        lastTime /=60;
+        if (now - lastTime < 60) {
+            return (now - lastTime) + "m";
+        }
+        now /= 60;
+        lastTime /=60;
+        if (now - lastTime < 24) {
+            return (now - lastTime) + "h";
+        }
+        now /= 24;
+        lastTime /= 24;
+        return (now - lastTime) + "d";
+    }
+
+
     public String getTimeDesc(long lastTime) {
         long now = System.currentTimeMillis() / 1000;
         if (now - lastTime < 60) {
@@ -360,6 +490,7 @@ public class MainActivity extends AppCompatActivity {
                 }
             } while (true);
 
+            initTableMap(status, updateTime);
             String result = getDescription(status, updateTime);
             Log.e(TAG, result);
             TextView tv = findViewById(R.id.result);

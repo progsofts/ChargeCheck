@@ -45,6 +45,14 @@
                         android:text="TextView" />
 
                     <TableLayout
+                        android:id="@+id/mapTableLayout"
+                        android:layout_width="170dp"
+                        android:layout_height="wrap_content"
+                        android:layout_margin="20dp"
+                        android:background="@color/black"
+                        android:stretchColumns="*" />
+
+                    <TableLayout
                         android:id="@+id/tableLayout"
                         android:layout_width="1100dp"
                         android:layout_height="wrap_content"
